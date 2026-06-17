@@ -100,19 +100,46 @@ class SimulationBridge:
 
     def process_ai_results(self):
         """
-        4. Execution Handoff
+        4. Execution Lifecycle Routing (Task 4.2)
         Checks every frame if the background AI thread has returned a decision.
         """
         try:
-            # Non-blocking check of the queue
-            action = self.ai_result_queue.get_nowait()
+            # 1. Unpack the Agent Response
+            # Non-blocking check of the queue to capture the returned response object
+            response = self.ai_result_queue.get_nowait()
+            
+            # 4. Robust Fallbacks
+            # Define our safe fallback default
+            action = "STAY"
+            
+            try:
+                # Handle extraction whether it returns a raw dict or a parsed string
+                if isinstance(response, dict):
+                    action = response.get("action", "STAY")
+                elif isinstance(response, str):
+                    action = response
+                else:
+                    raise ValueError(f"Unexpected response type: {type(response)}")
+
+                # Validate the extracted action strictly
+                valid_maneuvers = ["MOVE_LEFT", "MOVE_RIGHT", "STAY"]
+                if action not in valid_maneuvers:
+                    print(f"[AI ROUTING ANOMALY] Unrecognized string '{action}'. Defaulting to STAY.")
+                    action = "STAY"
+                    
+            except Exception as unpack_err:
+                # Catch corrupted formats or missing keys and log the anomaly
+                print(f"[AI ROUTING ANOMALY] Unpacking error: {unpack_err}. Defaulting to STAY.")
+                action = "STAY"
             
             print(f"[AI DECISION RECEIVED] -> Executing: {action}")
             
-            # Pass the AI's string action directly into the car's steering mechanism
+            # 2. Pipe Data into the Engine
+            # Safely pass the validated string directly into the active Pygame car object
             self.engine.car.execute_action(action)
             
-            # Reset flag so the next 500ms trigger can fire
+            # 3. State and Flags Reset
+            # Safely unlock the system so the next 0.5-second timer trigger can spawn a new task
             self.ai_is_thinking = False
             
         except queue.Empty:
