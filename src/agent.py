@@ -1,50 +1,104 @@
 import os
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
+from langchain_core.prompts import PromptTemplate
 
-def initialize_llm() -> ChatGroq:
-    """
-    Initializes the Groq LLM client.
-    Ensures environment variables are loaded and the model is configured 
-    for low latency (llama-3.1-8b-instant) and deterministic behavior (temperature=0).
-    """
-    # 1. Environment Variable Loading
-    # Calculate the path dynamically so it works regardless of where the script is executed from
-    # while adhering to the requirement of reaching back to the root directory's .env file
-    dotenv_path = os.path.join(os.path.dirname(__file__), "../.env")
-    load_dotenv(dotenv_path=dotenv_path)
+# ==============================================================================
+# ENVIRONMENT SETUP
+# ==============================================================================
+dotenv_path = os.path.join(os.path.dirname(__file__), "../.env")
+load_dotenv(dotenv_path=dotenv_path)
 
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY is missing. Please ensure your .env file is present in the root directory and contains the key.")
+api_key = os.environ.get("GROQ_API_KEY")
+if not api_key:
+    raise ValueError("GROQ_API_KEY is missing. Ensure the .env file is present in the root directory.")
 
-    # 2. Groq LLM Initialization
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0,
-        groq_api_key=api_key
-    )
-    
-    return llm
+# ==============================================================================
+# LLM INITIALIZATION & DETERMINISTIC CONSTRAINTS (Task 3.1 & 3.2)
+# ==============================================================================
+# Initialize ChatGroq with low-latency and deterministic settings
+raw_llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0,
+    groq_api_key=api_key
+)
 
+# Apply a JSON Schema to .with_structured_output() to enforce a dictionary return type.
+# This ensures LangChain strictly returns the exact JSON format natively.
+action_schema = {
+    "title": "DriverAction",
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["MOVE_LEFT", "MOVE_RIGHT", "STAY"],
+            "description": "The maneuver to take based on the hazard detections."
+        }
+    },
+    "required": ["action"]
+}
+structured_llm = raw_llm.with_structured_output(action_schema)
+
+# ==============================================================================
+# TASK CONTEXT COMPILER (Task 3.3)
+# ==============================================================================
+# Strict prompt instructing the AI on how to interpret radar and lane data
+PROMPT_TEMPLATE = """You are an autonomous driving agent navigating a highway.
+Your objective is to navigate safely by analyzing your current lane and upcoming radar detections.
+
+RULES:
+1. There are exactly 3 lanes: 1 (Left), 2 (Center), and 3 (Right).
+2. If there is a hazard in your current lane, you MUST maneuver to an adjacent clear lane.
+3. If your current lane is clear of hazards, you SHOULD STAY in your current lane to maintain stability.
+4. You must select one of the following maneuvers: "MOVE_LEFT", "MOVE_RIGHT", or "STAY".
+
+Current State:
+- Current Lane: {current_lane}
+- Radar Data (Upcoming Hazards): {radar_data}
+
+You must strictly respond with a single JSON dictionary containing exactly one key "action".
+Do not provide any explanations or extra markdown text.
+Example format: {{"action": "STAY"}}
+"""
+
+prompt = PromptTemplate(
+    template=PROMPT_TEMPLATE,
+    input_variables=["current_lane", "radar_data"]
+)
+
+# ==============================================================================
+# CHAIN ASSEMBLY
+# ==============================================================================
+# Combine the prompt and the structured LLM using the LangChain pipe operator
+ai_driver_chain = prompt | structured_llm
+
+# ==============================================================================
+# VERIFICATION BLOCK
+# ==============================================================================
 if __name__ == "__main__":
-    print("--- Groq Client Sanity Check ---")
+    print("--- Phase 3.2/3.3: AI Driver Chain Sanity Check ---")
     try:
-        # Initialize the LLM
-        agent_llm = initialize_llm()
+        # Mocking a scenario where the car is in Lane 2 (Center)
+        # Radar detects a blockade exactly in our path
+        mock_state = {
+            "current_lane": 2,
+            "radar_data": "Hazard detected in Lane 2 at Y=400"
+        }
         
-        # 3. Sanity Check Block
-        print("API Key loaded successfully. Pinging Groq cloud infrastructure...")
+        print("\nInvoking AI Driver Chain...")
+        print(f"Mock Input State: {mock_state}")
         
-        # Test completion call requesting a specific word to verify deterministic behavior
-        response = agent_llm.invoke("Are you receiving this? Please respond with exactly the word: 'Ready'")
+        # Invoke the chain
+        result = ai_driver_chain.invoke(mock_state)
         
-        print(f"\n[Response]: {response.content}")
-        print("✅ System Check Passed: LLM agent connected to Groq successfully.")
+        # Validate the output is a parsed dictionary
+        print(f"\n[Output Type]: {type(result)}")
+        print(f"[Parsed Output]: {result}")
         
-    except ValueError as ve:
-        # Catch errors related to missing .env file or missing GROQ_API_KEY
-        print(f"\n❌ Configuration Error: {ve}")
+        if isinstance(result, dict) and "action" in result:
+            print("\n✅ Verification Passed: AI successfully returned a structured Python dictionary with an action.")
+        else:
+            print("\n⚠️ Verification Failed: The output did not meet the structured dictionary criteria.")
+            
     except Exception as e:
-        # Catch connection errors or API rejection issues
-        print(f"\n❌ Network/API Error: Could not connect to Groq infrastructure.\nDetails: {e}")
+        print(f"\n❌ Execution Error: {e}")
