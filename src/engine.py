@@ -75,7 +75,7 @@ class Obstacle:
         self.y = -50  # Start slightly above the top boundary
         self.width = 60
         self.height = 60
-        self.speed = 8  # Pixels per frame downwards
+        self.speed = 3  # Reduced speed to give AI time to sync
 
     def update(self):
         self.y += self.speed
@@ -90,7 +90,7 @@ class Obstacle:
 class BackgroundLoop:
     def __init__(self):
         self.offset = 0
-        self.speed = 8  # Should match or be related to the apparent forward speed
+        self.speed = 3  # Matched to obstacle speed
 
     def update(self):
         self.offset += self.speed
@@ -157,8 +157,8 @@ class Engine:
             
             self.spawn_timer = 0
             
-            # Randomize the next spawn interval between ~0.5s to 1.5s (at 60 FPS)
-            self.spawn_interval = random.randint(30, 90)
+            # Randomize the next spawn interval to be slower (1.5s to 3s at 60 FPS)
+            self.spawn_interval = random.randint(90, 180)
             
         # Update existing obstacles
         for obs in self.obstacles:

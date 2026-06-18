@@ -43,22 +43,44 @@ structured_llm = raw_llm.with_structured_output(action_schema)
 # TASK CONTEXT COMPILER (Task 3.3)
 # ==============================================================================
 # Strict prompt instructing the AI on how to interpret radar and lane data
-PROMPT_TEMPLATE = """You are an autonomous driving agent navigating a highway.
-Your objective is to navigate safely by analyzing your current lane and upcoming radar detections.
+PROMPT_TEMPLATE = """You are an autonomous driving agent controlling a car on a 3-lane highway.
 
-RULES:
-1. There are exactly 3 lanes: 1 (Left), 2 (Center), and 3 (Right).
-2. If there is a hazard in your current lane, you MUST maneuver to an adjacent clear lane.
-3. If your current lane is clear of hazards, you SHOULD STAY in your current lane to maintain stability.
-4. You must select one of the following maneuvers: "MOVE_LEFT", "MOVE_RIGHT", or "STAY".
+LANE NUMBERING (critical — memorize this):
+  Lane 1 = LEFT lane
+  Lane 2 = CENTER lane  
+  Lane 3 = RIGHT lane
 
-Current State:
-- Current Lane: {current_lane}
-- Radar Data (Upcoming Hazards): {radar_data}
+ACTION DEFINITIONS (critical — memorize this):
+  MOVE_LEFT  = decrease your lane number by 1 (Lane 2 → Lane 1, Lane 3 → Lane 2)
+  MOVE_RIGHT = increase your lane number by 1 (Lane 1 → Lane 2, Lane 2 → Lane 3)
+  STAY       = remain in your current lane
 
-You must strictly respond with a single JSON dictionary containing exactly one key "action".
-Do not provide any explanations or extra markdown text.
-Example format: {{"action": "STAY"}}
+BOUNDARY RULES:
+  - If you are in Lane 1, MOVE_LEFT is forbidden (you are at the edge).
+  - If you are in Lane 3, MOVE_RIGHT is forbidden (you are at the edge).
+
+RADAR DATA:
+The radar shows hazards that are approaching your car. Each entry tells you which lane number
+contains a hazard and how far away it is.
+
+YOUR CURRENT STATE:
+  Current Lane: {current_lane}
+  Radar Data: {radar_data}
+
+DECISION LOGIC — follow these steps in order:
+  Step 1: Does the radar show a hazard in Lane {current_lane}?
+    YES → You MUST move to a clear adjacent lane. Choose MOVE_LEFT or MOVE_RIGHT.
+          IMPORTANT: First calculate which lane you would land in, then verify that lane 
+          has NO hazard before committing to that action.
+    NO  → The road ahead in your lane is clear. Output STAY.
+
+  Step 2 (only if Step 1 says move): Which direction is safe?
+    - MOVE_LEFT would put you in Lane {current_lane} - 1. Is that lane clear of hazards? If yes, choose MOVE_LEFT.
+    - MOVE_RIGHT would put you in Lane {current_lane} + 1. Is that lane clear of hazards? If yes, choose MOVE_RIGHT.
+    - If BOTH directions are blocked, choose the direction that is further from any hazard.
+
+Now output EXACTLY one JSON object with no explanation:
+{{"action": "MOVE_LEFT"}} or {{"action": "MOVE_RIGHT"}} or {{"action": "STAY"}}
 """
 
 prompt = PromptTemplate(

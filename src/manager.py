@@ -43,14 +43,23 @@ def radar_node(state: State) -> State:
     """
     car_y = state["car_y"]
     
-    # Query Qdrant for obstacles 200px to 400px ahead
+    # If pre-computed radar data was injected (from live Pygame obstacle list),
+    # use it directly and skip the Qdrant query entirely.
+    if state.get("radar_data"):
+        return {"radar_data": state["radar_data"]}
+    
+    # Fallback: query the live database using the current global_db reference
     hazards = global_db.get_upcoming_hazards(car_y)
     
-    # Format the results into a highly readable string for the LLM prompt
+    # Format the results into a detailed, lane-aware string for the LLM prompt
     if not hazards:
-        radar_summary = "Clear road ahead. No upcoming hazards detected."
+        radar_summary = "Clear road ahead. No upcoming hazards detected in any lane."
     else:
-        radar_summary = f"Detected {len(hazards)} hazards ahead: {hazards}"
+        hazard_descriptions = []
+        for h in hazards:
+            dist = int(car_y - h['y_position'])
+            hazard_descriptions.append(f"Lane {h['lane']} has a {h['hazard_type']} {dist}px ahead")
+        radar_summary = "; ".join(hazard_descriptions)
         
     return {"radar_data": radar_summary}
 
@@ -97,22 +106,23 @@ app = builder.compile()
 # ==============================================================================
 # 4. Public Interface
 # ==============================================================================
-def get_ai_decision(current_lane: int, car_y: float, db_override=None) -> str:
+def get_ai_decision(current_lane: int, car_y: float, db_override=None, radar_data_override: str = None) -> str:
     """
     Wrapper function to invoke the compiled LangGraph execution.
-    This is the clean public interface that `src/main.py` will call.
     
-    db_override: Allows the main script to pass the engine's populated 
-                 SpatialMemoryDB instance into the graph.
+    radar_data_override: Pre-computed radar string from the live Pygame obstacle list.
+                         When provided, the radar_node skips the Qdrant query entirely.
+    db_override: Allows the main script to pass the engine's SpatialMemoryDB instance.
     """
     global global_db
     if db_override is not None:
         global_db = db_override
 
-    # Define the initial state
+    # Define the initial state, injecting pre-computed radar if available
     initial_state = {
         "current_lane": current_lane,
-        "car_y": car_y
+        "car_y": car_y,
+        "radar_data": radar_data_override or ""  # Empty string triggers Qdrant fallback in radar_node
     }
     
     # Execute the graph synchronously
