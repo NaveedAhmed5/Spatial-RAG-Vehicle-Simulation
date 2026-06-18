@@ -43,8 +43,8 @@ class SimulationBridge:
         # Create a custom Pygame event ID for our AI radar ping
         self.AI_PING_EVENT = pygame.USEREVENT + 1
         
-        # Set Pygame's internal timer to fire this event exactly every 500 milliseconds
-        pygame.time.set_timer(self.AI_PING_EVENT, 500)
+        # Set Pygame's internal timer to fire this event every 1500 milliseconds (reduces API rate-limit hits)
+        pygame.time.set_timer(self.AI_PING_EVENT, 1500)
 
     def ai_worker_thread(self, current_lane: int, car_y: float):
         """
@@ -178,6 +178,7 @@ class SimulationBridge:
                 car_is_settled = (car.x == car.x // 1 and abs(car.x - (100 * car.current_lane)) < 2)
                 if not self.ai_is_thinking and self.action_cooldown <= 0:
                     self.ai_is_thinking = True
+                    self.engine.ai_thinking = True  # Update HUD badge
                     
                     # Spin up a daemon thread to perform the LangGraph network call.
                     # Daemon=True ensures threads terminate instantly if the main Pygame thread closes.
@@ -229,10 +230,8 @@ class SimulationBridge:
             self.engine.car.execute_action(action)
             
             # 3. State and Flags Reset
-            # Unlock the thinking flag so the next network call can be dispatched.
-            # Start a cooldown only if the car actually moved lanes (not STAY) 
-            # to give it time to reach the new lane before re-evaluating.
             self.ai_is_thinking = False
+            self.engine.ai_thinking = False  # Reset HUD badge
             if action != "STAY":
                 self.action_cooldown = self.COOLDOWN_FRAMES
                 print(f"[LANE LOCK] Cooldown started ({self.COOLDOWN_FRAMES} frames). Blocking AI re-evaluation.")
