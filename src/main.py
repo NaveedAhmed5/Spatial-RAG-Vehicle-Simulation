@@ -43,48 +43,26 @@ class SimulationBridge:
         # Create a custom Pygame event ID for our AI radar ping
         self.AI_PING_EVENT = pygame.USEREVENT + 1
         
-        # Set Pygame's internal timer to fire this event every 1500 milliseconds (reduces API rate-limit hits)
         pygame.time.set_timer(self.AI_PING_EVENT, 1500)
 
     def ai_worker_thread(self, current_lane: int, car_y: float):
         """
-        Background worker that computes radar and calls the LLM.
-        
-        CRITICAL DESIGN NOTE:
-        We do NOT query Qdrant here for radar data. Instead, we snapshot
-        the live Pygame obstacle list directly at the time of the ping.
-        This is reliable because:
-        1. Qdrant's set_payload updates can lag behind 60Hz physics ticks.
-        2. The live list always reflects the exact current obstacle positions.
-        The Qdrant DB is still used for logging/deletion bookkeeping.
+        Background worker that queries Qdrant DB for radar data and calls the LLM.
         """
         try:
-            # --- Radar Computation (from live Pygame state) ---
-            # Snapshot the obstacle list from the engine thread.
-            # Python list reads are GIL-safe for simple attribute access.
-            obstacle_snapshot = [(obs.lane, obs.y) for obs in self.engine.obstacles]
-            
-            # Radar window: 50px to 350px above the car's current Y
-            y_near = car_y - 50
-            y_far  = car_y - 350
-            
-            radar_hazards = [
-                (lane, y) for lane, y in obstacle_snapshot
-                if y_far <= y <= y_near
-            ]
+            # --- Radar Computation (from Qdrant Database) ---
+            hazards = self.engine.db.get_upcoming_hazards(car_y)
             
             # Format radar into a human-readable string for the LLM
-            if not radar_hazards:
+            if not hazards:
                 radar_data = "Clear road ahead. No upcoming hazards detected."
             else:
-                # Sort closest threats first (highest Y value = closest to car)
-                radar_hazards.sort(key=lambda h: h[1], reverse=True)
                 parts = [
-                    f"Lane {lane} has a blockage {int(car_y - y)}px ahead"
-                    for lane, y in radar_hazards
+                    f"Lane {h['lane']} has a blockage {int(car_y - h['y_position'])}px ahead"
+                    for h in hazards
                 ]
                 radar_data = "; ".join(parts)
-                print(f"[RADAR HIT] {radar_data}")
+                print(f"[RADAR HIT (Qdrant)] {radar_data}")
             
             # --- LLM Decision ---
             decision = get_ai_decision(
@@ -137,7 +115,7 @@ class SimulationBridge:
 
         if dodge:
             print(f"[60Hz SAFETY] Imminent threat in Lane {current_lane} @ "
-                  f"{int(car_y - critical_threats[0].y)}px → Emergency {dodge}")
+                  f"{int(car_y - critical_threats[0].y)}px -> Emergency {dodge}")
             car.execute_action(dodge)
             # Apply a short cooldown to prevent jitter on the next frame
             self.action_cooldown = self.COOLDOWN_FRAMES

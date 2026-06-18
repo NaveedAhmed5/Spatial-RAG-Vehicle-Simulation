@@ -16,34 +16,38 @@ ROAD_RIGHT = 350
 # === LANE CONFIG ===
 LANE_X = {1: 100, 2: 200, 3: 300}
 
-# === COLOR PALETTE ===
-C_SKY        = (10,  12,  22)
-C_GRASS_L    = (12,  32,  12)
-C_ROAD       = (28,  30,  40)
-C_ROAD_ALT   = (33,  35,  46)
-C_EDGE       = (220, 220, 220)
-C_DASH       = (190, 190, 190)
-C_SPEEDLINE  = (40,  42,  56)
+# === COLOR PALETTE (Neon Synthwave Style) ===
+C_SKY        = (15, 10, 30)      # Deep purple night sky
+C_GRASS_L    = (25, 15, 45)      # Darker purple off-road
+C_ROAD       = (20, 22, 28)      # Dark asphalt
+C_ROAD_ALT   = (25, 27, 35)      
+C_EDGE       = (200, 50, 255)    # Neon purple road edges
+C_DASH       = (255, 255, 255)   # White lane dividers
+C_SPEEDLINE  = (40, 45, 60)      # Subtle road texture
 
-C_CAR_BODY   = (35,  100, 250)
-C_CAR_ROOF   = (18,  58,  175)
-C_CAR_GLASS  = (130, 195, 255)
-C_HEADLIGHT  = (255, 255, 210)
-C_TAILLIGHT  = (255, 35,  35)
-C_WHEEL      = (18,  18,  28)
-C_CAR_SHINE  = (80,  155, 255)
+# Cyberpunk Car
+C_CAR_BODY   = (0, 255, 255)     # Neon Cyan
+C_CAR_ROOF   = (0, 180, 200)     
+C_CAR_GLASS  = (20, 30, 50)      # Dark tinted glass
+C_HEADLIGHT  = (255, 255, 255)   
+C_TAILLIGHT  = (255, 0, 100)     # Neon pink taillights
+C_WHEEL      = (10, 10, 15)      
+C_CAR_SHINE  = (150, 255, 255)   
 
-C_OBS_BODY   = (185, 42,  22)
-C_OBS_STRIPE = (235, 165, 0)
-C_OBS_GLOW   = (255, 75,  40)
-C_OBS_DARK   = (120, 25,  10)
+# Neon Obstacles
+C_OBS_BODY   = (255, 20, 80)     # Hot Pink / Neon Red
+C_OBS_STRIPE = (255, 255, 0)     # Bright Yellow warning stripes
+C_OBS_GLOW   = (255, 100, 100)   
+C_OBS_DARK   = (100, 10, 30)     
 
+# HUD & UI
 C_WHITE      = (255, 255, 255)
-C_CYAN       = (70,  200, 255)
-C_GREEN      = (70,  235, 115)
-C_YELLOW     = (255, 215, 40)
-C_RED_HUD    = (255, 60,  60)
-C_DIM        = (55,  58,  75)
+C_CYAN       = (0, 255, 255)
+C_GREEN      = (50, 255, 100)
+C_YELLOW     = (255, 220, 0)
+C_RED_HUD    = (255, 50, 50)
+C_DIM        = (80, 80, 100)
+C_HUD_BG     = (10, 15, 25, 220) # Semi-transparent dark blue
 
 
 class Particle:
@@ -115,9 +119,12 @@ class BackgroundLoop:
             for y in range(-70 + int(self.offset), HEIGHT, 70):
                 pygame.draw.rect(surface, C_DASH, (div_x - 2, y, 4, 42), border_radius=1)
 
-        # Road edge solid lines
-        pygame.draw.rect(surface, C_EDGE, (ROAD_LEFT - 5, 0, 5, HEIGHT))
-        pygame.draw.rect(surface, C_EDGE, (ROAD_RIGHT, 0, 5, HEIGHT))
+        # Road edge glowing lines (neon style)
+        pygame.draw.rect(surface, C_EDGE, (ROAD_LEFT - 4, 0, 4, HEIGHT))
+        pygame.draw.rect(surface, C_EDGE, (ROAD_RIGHT, 0, 4, HEIGHT))
+        # Add subtle glow effect outside the road edges
+        pygame.draw.rect(surface, (*C_EDGE[:3], 100), (ROAD_LEFT - 8, 0, 4, HEIGHT))
+        pygame.draw.rect(surface, (*C_EDGE[:3], 100), (ROAD_RIGHT + 4, 0, 4, HEIGHT))
 
 
 class Car:
@@ -176,11 +183,15 @@ class Car:
         rw = pygame.Rect(cx - w//2 + 10, cy - h//2 + h//2 - 5, w - 20, 14)
         pygame.draw.rect(surface, C_CAR_GLASS, rw, border_radius=4)
 
-        # Headlights (top/front)
+        # Headlights (top/front) with glow
         for lx in [cx - w//2 + 3, cx + w//2 - 11]:
             pygame.draw.rect(surface, C_HEADLIGHT, (lx, cy - h//2 + 4, 8, 5), border_radius=2)
-            # Glow dot
-            pygame.draw.circle(surface, (255, 255, 240), (lx + 4, cy - h//2 + 6), 2)
+            # Inner bright dot
+            pygame.draw.circle(surface, C_WHITE, (lx + 4, cy - h//2 + 6), 2)
+            # Outer glow
+            glow_surf = pygame.Surface((16, 16), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (255, 255, 255, 100), (8, 8), 6)
+            surface.blit(glow_surf, (lx - 4, cy - h//2 - 2))
 
         # Taillights (bottom/rear)
         for lx in [cx - w//2 + 3, cx + w//2 - 11]:
@@ -234,6 +245,10 @@ class Obstacle:
         # Warning lights (flashing red, top corners)
         for lx in [cx - w//2 + 3, cx + w//2 - 11]:
             pygame.draw.rect(surface, C_OBS_GLOW, (lx, cy - h//2 + 4, 8, 5), border_radius=2)
+            # Add glow effect
+            glow_surf = pygame.Surface((16, 16), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (*C_OBS_GLOW[:3], 150), (8, 8), 5)
+            surface.blit(glow_surf, (lx - 4, cy - h//2 - 2))
 
         # Exclamation mark symbol
         pygame.draw.rect(surface, C_OBS_STRIPE, (cx - 3, cy - h//4 + 2, 6, h//2 - 10), border_radius=2)
@@ -243,56 +258,84 @@ class Obstacle:
 class HUD:
     def __init__(self):
         pygame.font.init()
-        self.font_lg = pygame.font.SysFont("Consolas", 17, bold=True)
-        self.font_sm = pygame.font.SysFont("Consolas", 13)
+        # Use more modern looking default fonts
+        self.font_lg = pygame.font.SysFont("Segoe UI", 20, bold=True)
+        self.font_md = pygame.font.SysFont("Segoe UI", 16, bold=True)
+        self.font_sm = pygame.font.SysFont("Segoe UI", 14)
         self.score   = 0
 
     def update(self):
         self.score += 1
 
     def draw(self, surface, car_lane: int, ai_thinking: bool):
-        # --- TOP BAR ---
-        top_h = 46
+        # --- TOP BAR (Score & Status) ---
+        top_h = 50
         top_bg = pygame.Surface((WIDTH, top_h), pygame.SRCALPHA)
-        top_bg.fill((5, 6, 14, 210))
+        top_bg.fill(C_HUD_BG)
         surface.blit(top_bg, (0, 0))
-        pygame.draw.line(surface, C_CYAN, (0, top_h), (WIDTH, top_h), 1)
+        # Glowing bottom edge for top bar
+        pygame.draw.line(surface, C_CYAN, (0, top_h), (WIDTH, top_h), 2)
+        pygame.draw.line(surface, (*C_CYAN[:3], 100), (0, top_h+1), (WIDTH, top_h+1), 2)
 
-        # Distance (left)
+        # Distance counter (left)
         dist_m = self.score // 10
-        dist_surf = self.font_lg.render(f"DIST  {dist_m:>5}m", True, C_CYAN)
-        surface.blit(dist_surf, (10, 13))
+        dist_surf = self.font_lg.render(f"DISTANCE: {dist_m}m", True, C_CYAN)
+        surface.blit(dist_surf, (15, 12))
 
-        # AI badge (right)
+        # AI Status badge (right)
+        badge_w, badge_h = 80, 26
+        badge_x, badge_y = WIDTH - badge_w - 15, 12
+        
         if ai_thinking:
-            ai_txt   = "AI ..."
-            ai_color = C_YELLOW
+            badge_color = C_YELLOW
+            ai_txt = "AI THINKING"
         else:
-            ai_txt   = "AI RDY"
-            ai_color = C_GREEN
-        ai_surf = self.font_sm.render(ai_txt, True, ai_color)
-        surface.blit(ai_surf, (WIDTH - ai_surf.get_width() - 10, 15))
+            badge_color = C_GREEN
+            ai_txt = "AI READY"
+            
+        # Draw badge background
+        pygame.draw.rect(surface, (*badge_color[:3], 40), (badge_x, badge_y, badge_w, badge_h), border_radius=4)
+        pygame.draw.rect(surface, badge_color, (badge_x, badge_y, badge_w, badge_h), 1, border_radius=4)
+        
+        # Center text in badge
+        ai_surf = self.font_sm.render(ai_txt, True, badge_color)
+        text_x = badge_x + (badge_w - ai_surf.get_width()) // 2
+        text_y = badge_y + (badge_h - ai_surf.get_height()) // 2
+        surface.blit(ai_surf, (text_x, text_y))
 
-        # --- BOTTOM BAR ---
-        bot_h   = 40
+        # --- BOTTOM BAR (Lane Indicator) ---
+        bot_h = 50
         bot_top = HEIGHT - bot_h
-        bot_bg  = pygame.Surface((WIDTH, bot_h), pygame.SRCALPHA)
-        bot_bg.fill((5, 6, 14, 200))
+        bot_bg = pygame.Surface((WIDTH, bot_h), pygame.SRCALPHA)
+        bot_bg.fill(C_HUD_BG)
         surface.blit(bot_bg, (0, bot_top))
-        pygame.draw.line(surface, C_CYAN, (0, bot_top), (WIDTH, bot_top), 1)
+        # Glowing top edge for bottom bar
+        pygame.draw.line(surface, C_CYAN, (0, bot_top), (WIDTH, bot_top), 2)
+        pygame.draw.line(surface, (*C_CYAN[:3], 100), (0, bot_top-1), (WIDTH, bot_top-1), 2)
 
-        lane_label = {1: "◀ LEFT", 2: "● CENTER", 3: "RIGHT ▶"}
-        lbl_surf = self.font_sm.render(f"LANE:  {lane_label[car_lane]}", True, C_WHITE)
-        surface.blit(lbl_surf, (WIDTH // 2 - lbl_surf.get_width() // 2, bot_top + 12))
-
-        # Lane dots
+        # Draw interactive lane dots
+        lane_label = {1: "LEFT", 2: "CENTER", 3: "RIGHT"}
+        
         for ln, lx in LANE_X.items():
             is_active = (ln == car_lane)
-            col    = C_CYAN if is_active else C_DIM
-            radius = 6 if is_active else 4
-            pygame.draw.circle(surface, col, (lx, bot_top + 6), radius)
+            
+            # Draw connecting lines between dots
+            if ln < 3:
+                pygame.draw.line(surface, C_DIM, (lx + 15, bot_top + 25), (LANE_X[ln+1] - 15, bot_top + 25), 2)
+            
+            # Draw node
             if is_active:
-                pygame.draw.circle(surface, C_WHITE, (lx, bot_top + 6), radius, 1)
+                # Glowing active node
+                pygame.draw.circle(surface, (*C_CYAN[:3], 80), (lx, bot_top + 25), 12)
+                pygame.draw.circle(surface, C_CYAN, (lx, bot_top + 25), 8)
+                pygame.draw.circle(surface, C_WHITE, (lx, bot_top + 25), 4)
+                
+                # Draw label above the active node
+                lbl_surf = self.font_md.render(lane_label[ln], True, C_CYAN)
+                surface.blit(lbl_surf, (lx - lbl_surf.get_width() // 2, bot_top + 4))
+            else:
+                # Dim inactive node
+                pygame.draw.circle(surface, C_DIM, (lx, bot_top + 25), 6)
 
 
 class Engine:
