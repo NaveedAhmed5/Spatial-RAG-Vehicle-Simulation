@@ -84,11 +84,10 @@ class SpatialMemoryDB:
         Because Y=0 is the top of the screen and obstacles fall downwards towards the car,
         'ahead' means smaller Y values.
         """
-        # radar_closest: 50px ahead (nearly on top of car — urgent)
-        # radar_furthest: 350px ahead (far enough to react in time)
-        # Car is at Y=500, so the radar window is roughly Y=150 to Y=450
-        y_max = car_current_y - 50   # Closest boundary (50px above car)
-        y_min = car_current_y - 350  # Furthest boundary (350px above car)
+        # radar_closest: 40px behind/next-to car (so we don't merge into passing obstacles)
+        # radar_furthest: 600px ahead (entire screen)
+        y_max = car_current_y + 40   # Closest boundary
+        y_min = car_current_y - 600  # Furthest boundary
         
         try:
             # Query Qdrant with payload filtering

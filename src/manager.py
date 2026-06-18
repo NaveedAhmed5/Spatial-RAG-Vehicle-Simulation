@@ -3,7 +3,7 @@ from langgraph.graph import StateGraph, START, END
 
 # Import our custom dependencies from adjacent files
 from database import SpatialMemoryDB
-from agent import ai_driver_chain
+# from agent import ai_driver_chain
 
 # Initialize a default memory database so the module can run standalone.
 # Note: Because this is an in-memory client, it is empty by default.
@@ -18,40 +18,23 @@ class State(TypedDict):
     current_lane: int
     car_y: float
     radar_data: Union[List, str]
-    action: str
+    policy: dict
 
 # ==============================================================================
 # 2. Nodes
 # ==============================================================================
 def sensor_node(state: State) -> State:
-    """
-    Node 1 (Sensor Node):
-    Acts as a passthrough to confirm `current_lane` and `car_y` 
-    are securely loaded into the state from the external game loop.
-    """
-    # LangGraph automatically merges dictionary returns into the state
     return {
         "current_lane": state["current_lane"], 
         "car_y": state["car_y"]
     }
 
 def radar_node(state: State) -> State:
-    """
-    Node 2 (Radar Node):
-    Queries the spatial memory database for upcoming hazards 
-    and updates the state with the findings.
-    """
     car_y = state["car_y"]
-    
-    # If pre-computed radar data was injected (from live Pygame obstacle list),
-    # use it directly and skip the Qdrant query entirely.
     if state.get("radar_data"):
         return {"radar_data": state["radar_data"]}
     
-    # Fallback: query the live database using the current global_db reference
     hazards = global_db.get_upcoming_hazards(car_y)
-    
-    # Format the results into a detailed, lane-aware string for the LLM prompt
     if not hazards:
         radar_summary = "Clear road ahead. No upcoming hazards detected in any lane."
     else:
@@ -63,73 +46,111 @@ def radar_node(state: State) -> State:
         
     return {"radar_data": radar_summary}
 
+from langchain_core.messages import HumanMessage
+import json
+
 def agent_node(state: State) -> State:
-    """
-    Node 3 (Agent Node):
-    Passes the lane and radar data to the Groq LLM chain, extracting 
-    the exact action string ("MOVE_LEFT", "MOVE_RIGHT", or "STAY").
-    """
-    # Prepare the context dictionary expected by our PromptTemplate
-    chain_input = {
-        "current_lane": state["current_lane"],
-        "radar_data": state["radar_data"]
-    }
+    from agent import get_agent
+    ai_driver_agent = get_agent()
     
-    # Invoke the compiled LangChain (returns a dictionary due to our structured wrapper)
-    result = ai_driver_chain.invoke(chain_input)
+    human_msg = f"My Current Lane: {state['current_lane']}\nHazards Detected Ahead: {state['radar_data']}"
+    result = ai_driver_agent.invoke({"messages": [HumanMessage(content=human_msg)]})
+    final_text = result["messages"][-1].content
     
-    # Extract the exact string action
-    chosen_action = result.get("action", "STAY")
+    try:
+        parsed = json.loads(final_text)
+        chosen_policy = parsed if "strategy" in parsed else {"strategy": "CAUTIOUS", "preferred_lane": 2}
+    except Exception as e:
+        print(f"[JSON Parse Error] Could not parse ReAct output: {final_text}")
+        chosen_policy = {"strategy": "CAUTIOUS", "preferred_lane": 2}
     
-    return {"action": chosen_action}
+    return {"policy": chosen_policy}
 
 # ==============================================================================
 # 3. Build and Compile the Graph
 # ==============================================================================
-# Initialize the state graph
 builder = StateGraph(State)
-
-# Add the nodes
 builder.add_node("sensor", sensor_node)
 builder.add_node("radar", radar_node)
 builder.add_node("agent", agent_node)
-
-# Add linear edges connecting them: START -> Sensor -> Radar -> Agent -> END
 builder.add_edge(START, "sensor")
 builder.add_edge("sensor", "radar")
 builder.add_edge("radar", "agent")
 builder.add_edge("agent", END)
-
-# Compile the graph into an executable application
 app = builder.compile()
 
 # ==============================================================================
-# 4. Public Interface
+# 4. Public Interface & Reflex Engine
 # ==============================================================================
-def get_ai_decision(current_lane: int, car_y: float, db_override=None, radar_data_override: str = None) -> str:
-    """
-    Wrapper function to invoke the compiled LangGraph execution.
-    
-    radar_data_override: Pre-computed radar string from the live Pygame obstacle list.
-                         When provided, the radar_node skips the Qdrant query entirely.
-    db_override: Allows the main script to pass the engine's SpatialMemoryDB instance.
-    """
+def get_ai_decision(current_lane: int, car_y: float, db_override=None, radar_data_override: str = None) -> dict:
     global global_db
     if db_override is not None:
         global_db = db_override
 
-    # Define the initial state, injecting pre-computed radar if available
     initial_state = {
         "current_lane": current_lane,
         "car_y": car_y,
-        "radar_data": radar_data_override or ""  # Empty string triggers Qdrant fallback in radar_node
+        "radar_data": radar_data_override or ""
     }
     
-    # Execute the graph synchronously
     final_state = app.invoke(initial_state)
+    return final_state.get("policy", {"strategy": "CAUTIOUS", "preferred_lane": 2})
+
+def calculate_safe_maneuver(current_lane: int, obstacles: list, car_y: float, policy: dict) -> dict:
+    """
+    The deterministic Python Reflex Engine.
+    Runs at 60 FPS. Instantly calculates dodges based on exact math and current policy.
+    obstacles: list of live engine Obstacle objects.
+    """
+    strategy = policy.get("strategy", "CAUTIOUS")
+    preferred_lane = policy.get("preferred_lane", 2)
     
-    # Return ONLY the final string action
-    return final_state.get("action", "STAY")
+    dodge_threshold = 92 if strategy == "AGGRESSIVE" else 200
+    CRITICAL_THRESHOLD = 92 # We MUST dodge if closer than this
+    
+    current_lane_obstacles = [obs for obs in obstacles if obs.lane == current_lane and obs.y < car_y + 40]
+    
+    if not current_lane_obstacles:
+        if current_lane != preferred_lane:
+            pref_obs = [obs for obs in obstacles if obs.lane == preferred_lane and obs.y > car_y - dodge_threshold and obs.y < car_y + 80]
+            if not pref_obs:
+                action = "MOVE_LEFT" if preferred_lane < current_lane else "MOVE_RIGHT"
+                return {"action": action, "delay_ms": 0}
+        return {"action": "STAY", "delay_ms": 0}
+        
+    closest_obs = max(current_lane_obstacles, key=lambda o: o.y)
+    dist_to_obs = car_y - closest_obs.y
+    
+    # Do we NEED to dodge?
+    if dist_to_obs <= dodge_threshold:
+        adjacent_lanes = []
+        if current_lane > 1: adjacent_lanes.append(current_lane - 1)
+        if current_lane < 3: adjacent_lanes.append(current_lane + 1)
+        
+        lane_safety = {}
+        for l in adjacent_lanes:
+            obs_in_l = [obs for obs in obstacles if obs.lane == l and obs.y < car_y + 80]
+            if not obs_in_l:
+                lane_safety[l] = 9999 
+            else:
+                closest_l_obs = max(obs_in_l, key=lambda o: o.y)
+                lane_safety[l] = car_y - closest_l_obs.y
+                
+        best_lane = max(lane_safety, key=lane_safety.get)
+        best_safety_dist = lane_safety[best_lane]
+        
+        # Hysteresis: Don't dodge unless the target lane is significantly safer, OR we are critically close
+        if best_safety_dist > dist_to_obs + 50 or dist_to_obs <= CRITICAL_THRESHOLD:
+            
+            # Perfect slide check: is there an obstacle directly next to us?
+            if best_safety_dist > -80 and best_safety_dist < 80:
+                # Yes, wait for it to pass.
+                return {"action": "STAY", "delay_ms": 0}
+                
+            action = "MOVE_LEFT" if best_lane < current_lane else "MOVE_RIGHT"
+            return {"action": action, "delay_ms": 0}
+            
+    return {"action": "STAY", "delay_ms": 0}
 
 # ==============================================================================
 # VERIFICATION BLOCK
@@ -138,18 +159,14 @@ if __name__ == "__main__":
     print("--- Phase 3.4: LangGraph Manager Sanity Check ---")
     
     import uuid
-    # Inject a mock hazard into our local database to test the radar node properly
     global_db.log_hazard(lane=2, y_position=400, hazard_type="blockage", hazard_id=str(uuid.uuid4()))
     
     print("\nSimulating a LangGraph loop...")
-    print("State: Car is at Y=500 in Lane 2. Hazard logged at Y=400 in Lane 2.")
-    
-    # Run the graph
     decision = get_ai_decision(current_lane=2, car_y=500)
     
     print(f"\n[Final Graph Output]: {decision}")
     
-    if decision in ["MOVE_LEFT", "MOVE_RIGHT", "STAY"]:
-        print("✅ Verification Passed: LangGraph successfully routed data and extracted the string maneuver.")
+    if isinstance(decision, dict) and "strategy" in decision:
+        print("✅ Verification Passed: LangGraph successfully returned a strategic policy.")
     else:
-        print("⚠️ Verification Failed: The graph did not return a valid maneuver string.")
+        print("⚠️ Verification Failed: The graph did not return a valid policy dictionary.")

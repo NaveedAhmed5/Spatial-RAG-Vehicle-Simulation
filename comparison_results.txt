@@ -1,0 +1,36 @@
+============================================================
+  A/B COMPARISON REPORT: LLM vs NO-LLM
+  Random Seed: 42 (identical obstacle patterns)
+============================================================
+
+── NO_LLM ──
+  Survived:        1799 frames (30.0s)
+  Crashed:         NO ✅
+  Total Spawns:    7
+  Total Dodges:    2
+  Strategy Shifts: 0 (fixed CAUTIOUS)
+  Dodge Log:
+    Frame 1256: MOVE_LEFT    from Lane 2 [CAUTIOUS]
+    Frame 1793: MOVE_RIGHT   from Lane 1 [CAUTIOUS]
+
+── LLM ──
+  Survived:        1799 frames (30.0s)
+  Crashed:         NO ✅
+  Total Spawns:    7
+  Total Dodges:    4
+  Strategy Shifts: 5
+    Frame 476: {'strategy': 'CAUTIOUS', 'preferred_lane': 2}
+    Frame 606: {'strategy': 'CAUTIOUS', 'preferred_lane': 2}
+    Frame 907: {'strategy': 'CAUTIOUS', 'preferred_lane': 2}
+    Frame 1207: {'strategy': 'CAUTIOUS', 'preferred_lane': 2}
+    Frame 1507: {'strategy': 'CAUTIOUS', 'preferred_lane': 2}
+  Dodge Log:
+    Frame  661: MOVE_RIGHT   from Lane 2 [CAUTIOUS]
+    Frame  941: MOVE_LEFT    from Lane 3 [CAUTIOUS]
+    Frame 1446: MOVE_RIGHT   from Lane 2 [CAUTIOUS]
+    Frame 1726: MOVE_LEFT    from Lane 3 [CAUTIOUS]
+
+============================================================
+  VERDICT
+============================================================
+  DRAW: Both survived. No-LLM made 2 fewer dodges (LLM overcorrected).

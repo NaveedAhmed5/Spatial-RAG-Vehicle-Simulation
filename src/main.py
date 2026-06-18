@@ -7,7 +7,7 @@ import queue
 # Import our standalone physical game engine and its frame rate
 from engine import Engine, FPS
 # Import the LangGraph routing manager
-from manager import get_ai_decision
+from manager import get_ai_decision, calculate_safe_maneuver
 
 class SimulationBridge:
     """
@@ -26,6 +26,9 @@ class SimulationBridge:
         # from the background thread safely back to the main Pygame thread.
         self.ai_result_queue = queue.Queue()
         
+        # 3. Hybrid Strategy
+        self.current_policy = {"strategy": "CAUTIOUS", "preferred_lane": 2}
+        
         # A flag to prevent stacking API calls if the network is slow
         self.ai_is_thinking = False
         
@@ -38,128 +41,45 @@ class SimulationBridge:
         self.CRITICAL_DISTANCE = 120
         
         # ======================================================================
-        # 3. The 0.5s Trigger (2Hz) Setup
+        # The 2s Trigger (0.5Hz) Setup
         # ======================================================================
         # Create a custom Pygame event ID for our AI radar ping
         self.AI_PING_EVENT = pygame.USEREVENT + 1
         
-        pygame.time.set_timer(self.AI_PING_EVENT, 1500)
+        pygame.time.set_timer(self.AI_PING_EVENT, 2000)
 
     def ai_worker_thread(self, current_lane: int, car_y: float):
         """
-        Background worker that queries Qdrant DB for radar data and calls the LLM.
+        Background thread that fetches the new Strategy from the LLM.
         """
         try:
-            # --- Radar Computation (from Qdrant Database) ---
-            hazards = self.engine.db.get_upcoming_hazards(car_y)
-            
-            # Format radar into a human-readable string for the LLM
-            if not hazards:
-                radar_data = "Clear road ahead. No upcoming hazards detected."
-            else:
-                parts = [
-                    f"Lane {h['lane']} has a blockage {int(car_y - h['y_position'])}px ahead"
-                    for h in hazards
-                ]
-                radar_data = "; ".join(parts)
-                print(f"[RADAR HIT (Qdrant)] {radar_data}")
-            
-            # --- LLM Decision ---
-            decision = get_ai_decision(
-                current_lane=current_lane,
-                car_y=car_y,
-                radar_data_override=radar_data
+            # We pass the engine's populated Qdrant memory database into the LangGraph function
+            policy = get_ai_decision(
+                current_lane=current_lane, 
+                car_y=car_y, 
+                db_override=self.engine.db
             )
-            
-            self.ai_result_queue.put(decision)
-            
+            self.ai_result_queue.put(policy)
         except Exception as e:
             print(f"AI Thread Error: {e}")
-            self.ai_result_queue.put("STAY")
-
-    def per_frame_safety_check(self):
-        """
-        60Hz Physics Safety Layer.
-        Runs EVERY FRAME. Independently checks if any obstacle is within
-        CRITICAL_DISTANCE of the car's current lane. If an imminent collision 
-        is detected, it immediately executes a dodge WITHOUT waiting for the LLM.
-        
-        This decouples life-safety from LLM network latency entirely.
-        """
-        car = self.engine.car
-        car_y = car.y
-        current_lane = car.current_lane
-
-        # Find obstacles that are critically close in the car's lane
-        critical_threats = [
-            obs for obs in self.engine.obstacles
-            if obs.lane == current_lane and 0 < (car_y - obs.y) <= self.CRITICAL_DISTANCE
-        ]
-
-        if not critical_threats:
-            return  # All clear, no intervention needed
-
-        # Imminent collision detected — compute safe dodge direction NOW
-        # Check which adjacent lanes are free of ANY nearby obstacle (within 2x critical zone)
-        check_range = self.CRITICAL_DISTANCE * 2
-        occupied_lanes = {
-            obs.lane for obs in self.engine.obstacles
-            if 0 < (car_y - obs.y) <= check_range
-        }
-
-        dodge = None
-        if current_lane > 1 and (current_lane - 1) not in occupied_lanes:
-            dodge = "MOVE_LEFT"
-        elif current_lane < 3 and (current_lane + 1) not in occupied_lanes:
-            dodge = "MOVE_RIGHT"
-
-        if dodge:
-            print(f"[60Hz SAFETY] Imminent threat in Lane {current_lane} @ "
-                  f"{int(car_y - critical_threats[0].y)}px -> Emergency {dodge}")
-            car.execute_action(dodge)
-            # Apply a short cooldown to prevent jitter on the next frame
-            self.action_cooldown = self.COOLDOWN_FRAMES
-            # Cancel any pending AI result since the situation has changed
-            while not self.ai_result_queue.empty():
-                try:
-                    self.ai_result_queue.get_nowait()
-                except:
-                    pass
-            self.ai_is_thinking = False
+            self.ai_result_queue.put({"strategy": "CAUTIOUS", "preferred_lane": 2})
 
     def handle_events(self):
-        """
-        Intercepts all Pygame events. 
-        Replaces `Engine.handle_events()` so we can catch our custom AI trigger.
-        """
         for event in pygame.event.get():
-            # 5. Graceful Shutdown
             if event.type == pygame.QUIT:
-                print("\n[SHUTDOWN] Window closed. Terminating Simulation...")
-                pygame.quit()
-                sys.exit()
+                self.engine.running = False
                 
-            # Intercept manual keyboard overrides (Useful for debugging)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_LEFT:
                     self.engine.car.execute_action("MOVE_LEFT")
                 elif event.key == pygame.K_RIGHT:
                     self.engine.car.execute_action("MOVE_RIGHT")
                     
-            # The 0.5s AI Trigger Execution
             elif event.type == self.AI_PING_EVENT:
-                # Block the trigger if:
-                # 1. The AI is already processing a previous ping (network debounce)
-                # 2. The car is still transitioning to a new lane (oscillation prevention)
-                # 3. A cooldown is active after a recent action (stability grace period)
-                car = self.engine.car
-                car_is_settled = (car.x == car.x // 1 and abs(car.x - (100 * car.current_lane)) < 2)
-                if not self.ai_is_thinking and self.action_cooldown <= 0:
+                if not self.ai_is_thinking:
                     self.ai_is_thinking = True
                     self.engine.ai_thinking = True  # Update HUD badge
                     
-                    # Spin up a daemon thread to perform the LangGraph network call.
-                    # Daemon=True ensures threads terminate instantly if the main Pygame thread closes.
                     thread = threading.Thread(
                         target=self.ai_worker_thread,
                         args=(self.engine.car.current_lane, self.engine.car.y),
@@ -168,87 +88,54 @@ class SimulationBridge:
                     thread.start()
 
     def process_ai_results(self):
-        """
-        4. Execution Lifecycle Routing (Task 4.2)
-        Checks every frame if the background AI thread has returned a decision.
-        """
         try:
-            # 1. Unpack the Agent Response
-            # Non-blocking check of the queue to capture the returned response object
             response = self.ai_result_queue.get_nowait()
             
-            # 4. Robust Fallbacks
-            # Define our safe fallback default
-            action = "STAY"
+            if isinstance(response, dict) and "strategy" in response:
+                self.current_policy = response
+                print(f"[STRATEGY UPDATED] -> {self.current_policy}")
             
-            try:
-                # Handle extraction whether it returns a raw dict or a parsed string
-                if isinstance(response, dict):
-                    action = response.get("action", "STAY")
-                elif isinstance(response, str):
-                    action = response
-                else:
-                    raise ValueError(f"Unexpected response type: {type(response)}")
-
-                # Validate the extracted action strictly
-                valid_maneuvers = ["MOVE_LEFT", "MOVE_RIGHT", "STAY"]
-                if action not in valid_maneuvers:
-                    print(f"[AI ROUTING ANOMALY] Unrecognized string '{action}'. Defaulting to STAY.")
-                    action = "STAY"
-                    
-            except Exception as unpack_err:
-                # Catch corrupted formats or missing keys and log the anomaly
-                print(f"[AI ROUTING ANOMALY] Unpacking error: {unpack_err}. Defaulting to STAY.")
-                action = "STAY"
-            
-            print(f"[AI DECISION RECEIVED] -> Executing: {action}")
-            
-            # 2. Pipe Data into the Engine
-            # Safely pass the validated string directly into the active Pygame car object
-            self.engine.car.execute_action(action)
-            
-            # 3. State and Flags Reset
             self.ai_is_thinking = False
             self.engine.ai_thinking = False  # Reset HUD badge
-            if action != "STAY":
-                self.action_cooldown = self.COOLDOWN_FRAMES
-                print(f"[LANE LOCK] Cooldown started ({self.COOLDOWN_FRAMES} frames). Blocking AI re-evaluation.")
             
         except queue.Empty:
-            # Queue is empty, the LLM is still thinking, keep cruising at 60 FPS
             pass
 
     def run(self):
-        """
-        The Main Bridge Loop.
-        Locks the visual engine to 60 FPS while transparently managing the async AI handoffs.
-        """
         print("========================================")
-        print("Starting RAG Racer Simulation Bridge...")
+        print("Starting RAG Racer Simulation Bridge (Hybrid Architecture)...")
         print("Close the Pygame window to terminate.")
         print("========================================")
         
         while self.engine.running:
-            # 0. Tick down the cooldown counter each frame
+            # 0. Process Pathfinding and Cooldown
             if self.action_cooldown > 0:
                 self.action_cooldown -= 1
+            else:
+                # Synchronous Python Reflex Engine
+                maneuver = calculate_safe_maneuver(
+                    current_lane=self.engine.car.current_lane,
+                    obstacles=self.engine.obstacles,
+                    car_y=self.engine.car.y,
+                    policy=self.current_policy
+                )
                 
-            # 1. Event Handling Layer (UI interaction & AI triggering)
+                action = maneuver.get("action", "STAY")
+                if action != "STAY":
+                    print(f"[REFLEX DODGE] -> {action} (Strategy: {self.current_policy.get('strategy')})")
+                    self.engine.car.execute_action(action)
+                    self.action_cooldown = self.COOLDOWN_FRAMES
+                    print(f"[LANE LOCK] Cooldown started ({self.COOLDOWN_FRAMES} frames).")
+                
+            # 1. Event Handling Layer
             self.handle_events()
             
-            # 2. Asynchronous Handoff Layer (Read AI advisory results)
+            # 2. Asynchronous Handoff Layer
             self.process_ai_results()
             
-            # 3. 60Hz Physics Safety Layer (overrides AI if needed)
-            self.per_frame_safety_check()
-            
-            # 4. Physics & Mechanics Layer (Moving things down the screen)
+            # 3. Physics & Mechanics Layer
             self.engine.update()
-            
-            # 5. Rendering Layer (Drawing the pixels)
             self.engine.draw()
-            
-            # Lock frame rate
             self.engine.clock.tick(FPS)
             
         print("\n[CRASH] Engine stopped internally. Bridge terminating.")

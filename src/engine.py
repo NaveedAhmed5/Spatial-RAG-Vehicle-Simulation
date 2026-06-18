@@ -78,7 +78,7 @@ class Particle:
 class BackgroundLoop:
     def __init__(self):
         self.offset    = 0.0
-        self.speed     = 3
+        self.speed     = 1.0
         self.particles = [Particle() for _ in range(30)]
 
     def update(self):
@@ -211,7 +211,7 @@ class Obstacle:
         self.y      = float(-55)
         self.width  = 52
         self.height = 58
-        self.speed  = 3.0
+        self.speed  = 1.0
 
     def update(self):
         self.y += self.speed
@@ -339,11 +339,16 @@ class HUD:
 
 
 class Engine:
-    def __init__(self):
+    def __init__(self, random_seed: int | None = None):
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("RAG Racer — Spatial AI Simulation")
         self.clock  = pygame.time.Clock()
+
+        # Fix the random seed for deterministic obstacle spawning in tests
+        if random_seed is not None:
+            random.seed(random_seed)
+            print(f"[ENGINE] Random seed fixed to {random_seed} — obstacle spawns are deterministic.")
 
         self.db         = SpatialMemoryDB()
         self.car        = Car()
